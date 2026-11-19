@@ -27,6 +27,7 @@ SOFTWARE.
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -1068,5 +1069,196 @@ public class XMLTest {
             });
             fail("Expected to be unable to modify the config");
         } catch (Exception ignored) { }
+    }
+
+    @Test
+    public void testMaxNestingDepthOf42IsRespected() {
+        final String wayTooLongMalformedXML = new String(new char[6000]).replace("\0", "<a>");
+
+        final int maxNestingDepth = 42;
+
+        try {
+            XML.toJSONObject(wayTooLongMalformedXML, XMLParserConfiguration.ORIGINAL.withMaxNestingDepth(maxNestingDepth));
+
+            fail("Expecting a JSONException");
+        } catch (JSONException e) {
+            assertTrue("Wrong throwable thrown: not expecting message <" + e.getMessage() + ">",
+                e.getMessage().startsWith("Maximum nesting depth of " + maxNestingDepth));
+        }
+    }
+
+    @Test
+    public void testMaxNestingDepthIsRespectedWithValidXML() {
+        final String perfectlyFineXML = "<Test>\n" +
+            "  <employee>\n" +
+            "    <name>sonoo</name>\n" +
+            "    <salary>56000</salary>\n" +
+            "    <married>true</married>\n" +
+            "  </employee>\n" +
+            "</Test>\n";
+
+        final int maxNestingDepth = 1;
+
+        try {
+            XML.toJSONObject(perfectlyFineXML, XMLParserConfiguration.ORIGINAL.withMaxNestingDepth(maxNestingDepth));
+
+            fail("Expecting a JSONException");
+        } catch (JSONException e) {
+            assertTrue("Wrong throwable thrown: not expecting message <" + e.getMessage() + ">",
+                e.getMessage().startsWith("Maximum nesting depth of " + maxNestingDepth));
+        }
+    }
+
+    @Test
+    public void testMaxNestingDepthWithValidFittingXML() {
+        final String perfectlyFineXML = "<Test>\n" +
+            "  <employee>\n" +
+            "    <name>sonoo</name>\n" +
+            "    <salary>56000</salary>\n" +
+            "    <married>true</married>\n" +
+            "  </employee>\n" +
+            "</Test>\n";
+
+        final int maxNestingDepth = 3;
+
+        try {
+            XML.toJSONObject(perfectlyFineXML, XMLParserConfiguration.ORIGINAL.withMaxNestingDepth(maxNestingDepth));
+        } catch (JSONException e) {
+            e.printStackTrace();
+            fail("XML document should be parsed as its maximum depth fits the maxNestingDepth " +
+                "parameter of the XMLParserConfiguration used");
+        }
+    }
+
+    /**
+     * CVE-2022-45688: a deeply nested XML document converted with the default
+     * configuration must be rejected by the nesting depth limit instead of
+     * exhausting the stack with a StackOverflowError.
+     */
+    @Test
+    public void testToJSONObjectStringDefaultMaxNestingDepthIsEnforced() {
+        final String deeplyNestedXML = deeplyNestedXML();
+        assertDefaultMaxNestingDepthIsEnforced(new Runnable() {
+            @Override
+            public void run() {
+                XML.toJSONObject(deeplyNestedXML);
+            }
+        });
+    }
+
+    @Test
+    public void testToJSONObjectStringKeepStringsDefaultMaxNestingDepthIsEnforced() {
+        final String deeplyNestedXML = deeplyNestedXML();
+        assertDefaultMaxNestingDepthIsEnforced(new Runnable() {
+            @Override
+            public void run() {
+                XML.toJSONObject(deeplyNestedXML, true);
+            }
+        });
+    }
+
+    @Test
+    public void testToJSONObjectReaderDefaultMaxNestingDepthIsEnforced() {
+        final String deeplyNestedXML = deeplyNestedXML();
+        assertDefaultMaxNestingDepthIsEnforced(new Runnable() {
+            @Override
+            public void run() {
+                XML.toJSONObject(new StringReader(deeplyNestedXML));
+            }
+        });
+    }
+
+    @Test
+    public void testToJSONObjectReaderKeepStringsDefaultMaxNestingDepthIsEnforced() {
+        final String deeplyNestedXML = deeplyNestedXML();
+        assertDefaultMaxNestingDepthIsEnforced(new Runnable() {
+            @Override
+            public void run() {
+                XML.toJSONObject(new StringReader(deeplyNestedXML), true);
+            }
+        });
+    }
+
+    @Test
+    public void testToJSONObjectStringConfigDefaultMaxNestingDepthIsEnforced() {
+        final String deeplyNestedXML = deeplyNestedXML();
+        assertDefaultMaxNestingDepthIsEnforced(new Runnable() {
+            @Override
+            public void run() {
+                XML.toJSONObject(deeplyNestedXML, XMLParserConfiguration.KEEP_STRINGS);
+            }
+        });
+    }
+
+    @Test
+    public void testToJSONObjectReaderConfigDefaultMaxNestingDepthIsEnforced() {
+        final String deeplyNestedXML = deeplyNestedXML();
+        assertDefaultMaxNestingDepthIsEnforced(new Runnable() {
+            @Override
+            public void run() {
+                XML.toJSONObject(new StringReader(deeplyNestedXML), new XMLParserConfiguration());
+            }
+        });
+    }
+
+    /**
+     * A reasonably nested document stays well within the default limit.
+     */
+    @Test
+    public void testDefaultMaxNestingDepthAllowsReasonablyNestedXML() {
+        final int depth = 100;
+        final String nestedXML = new String(new char[depth]).replace("\0", "<a>")
+            + "x" + new String(new char[depth]).replace("\0", "</a>");
+
+        JSONObject jsonObject = XML.toJSONObject(nestedXML);
+        int actualDepth = 0;
+        Object current = jsonObject;
+        while (current instanceof JSONObject) {
+            current = ((JSONObject) current).get("a");
+            actualDepth++;
+        }
+        assertEquals(depth, actualDepth);
+        assertEquals("x", current);
+    }
+
+    /**
+     * A negative maximum nesting depth removes the limit.
+     */
+    @Test
+    public void testUndefinedMaxNestingDepthDisablesTheLimit() {
+        final int depth = 600;
+        final String nestedXML = new String(new char[depth]).replace("\0", "<a>")
+            + "x" + new String(new char[depth]).replace("\0", "</a>");
+
+        Throwable thrown = Util.throwableFromLargeStack(new Runnable() {
+            @Override
+            public void run() {
+                XML.toJSONObject(nestedXML, XMLParserConfiguration.ORIGINAL
+                    .withMaxNestingDepth(XMLParserConfiguration.UNDEFINED_MAXIMUM_NESTING_DEPTH));
+            }
+        });
+        assertNull("Expecting no exception, got " + thrown, thrown);
+    }
+
+    /**
+     * Builds a document of 200,000 nested, unclosed elements, which is far
+     * deeper than the default maximum nesting depth.
+     */
+    private static String deeplyNestedXML() {
+        return new String(new char[200000]).replace("\0", "<a>");
+    }
+
+    /**
+     * Runs the body on a large stack and checks that it was rejected by the
+     * default maximum nesting depth of 512, not by a StackOverflowError.
+     */
+    private static void assertDefaultMaxNestingDepthIsEnforced(Runnable body) {
+        Throwable thrown = Util.throwableFromLargeStack(body);
+        if (thrown == null) {
+            fail("Expecting a JSONException");
+        }
+        assertTrue("Wrong throwable thrown: " + thrown, thrown instanceof JSONException);
+        assertTrue("Wrong throwable thrown: not expecting message <" + thrown.getMessage() + ">",
+            thrown.getMessage().startsWith("Maximum nesting depth of 512 reached"));
     }
 }
